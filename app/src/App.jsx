@@ -25,18 +25,18 @@ function SetupPanel({ profile, setProfile, workout, setWorkout }) {
         {/* Plan Type */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Optavia Plan</label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             {Object.keys(PLAN_TEMPLATES).map((p) => (
               <button key={p} onClick={() => setProfile({ ...profile, plan_type: p })}
                 className={`py-2.5 px-3 rounded-xl text-sm font-semibold transition-all ${profile.plan_type === p
-                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105"
+                  ? (PLAN_TEMPLATES[p].is_glp1 ? "bg-teal-600 text-white shadow-lg shadow-teal-200 scale-105" : "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105")
                   : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-                {p}
+                {PLAN_TEMPLATES[p].is_glp1 ? "\uD83D\uDC8A GLP-1" : p}
               </button>
             ))}
           </div>
           <p className="text-xs text-gray-500 mt-1.5">
-            {PLAN_TEMPLATES[profile.plan_type].essential_count} Essential Fuelings + {PLAN_TEMPLATES[profile.plan_type].lean_green_count} Lean & Green
+            {PLAN_TEMPLATES[profile.plan_type].description}
           </p>
         </div>
 
@@ -84,7 +84,7 @@ function SetupPanel({ profile, setProfile, workout, setWorkout }) {
             className="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500" />
           <div>
             <div className="text-sm font-medium text-gray-700">{"\uD83D\uDCAA"} Athlete Mode</div>
-            <div className="text-xs text-gray-500">Enable 4th MPS trigger slot</div>
+            <div className="text-xs text-gray-500">Add bedtime EAA as 4th MPS trigger</div>
           </div>
         </label>
 
@@ -271,6 +271,11 @@ function SlotList({ result }) {
                         POST-WO
                       </span>
                     )}
+                    {slot.is_bedtime_eaa && (
+                      <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full text-[10px] font-bold flex-shrink-0">
+                        BEDTIME
+                      </span>
+                    )}
                     {slot.pushed && (
                       <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-bold flex-shrink-0">
                         PUSHED
@@ -432,7 +437,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-gray-900">MPS Optimal Fueling</h1>
-              <p className="text-xs text-gray-500">Scheduler &middot; {profile.plan_type} Plan</p>
+              <p className="text-xs text-gray-500">Scheduler &middot; {PLAN_TEMPLATES[profile.plan_type].label}</p>
             </div>
           </div>
           <div className={`px-4 py-2 rounded-full text-sm font-semibold ${STATUS_COLORS[result.summary.overall_status].bg} ${STATUS_COLORS[result.summary.overall_status].text}`}>
