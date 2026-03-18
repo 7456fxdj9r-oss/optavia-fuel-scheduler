@@ -4,7 +4,6 @@
 *.scad
 *.xlsx
 *.docx
-*.jsx
 .~lock.*
 client-tracking-deploy/
 node_modules/
