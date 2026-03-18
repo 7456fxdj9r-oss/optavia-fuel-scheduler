@@ -7,3 +7,5 @@
 .~lock.*
 client-tracking-deploy/
 node_modules/
+dist/
+.vite/
