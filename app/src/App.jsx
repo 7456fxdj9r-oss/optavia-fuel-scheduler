@@ -283,7 +283,7 @@ function SlotList({ result }) {
                     )}
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5">
-                    {fueling?.protein_grams ? `${fueling.protein_grams}g protein` : "Variable protein"} &middot; {fueling?.blood_sugar_impact.replace(/_/g, " ")}
+                    {fueling?.protein_grams ? `${fueling.protein_grams}g protein` : "Variable protein"} &middot; {fueling?.stabilizes_blood_sugar ? "stabilizes blood sugar" : "MPS only (no BS control)"}
                   </div>
                 </div>
 

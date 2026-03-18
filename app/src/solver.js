@@ -2,6 +2,13 @@
 // MPS OPTIMAL FUELING SCHEDULER — CONSTRAINT SOLVER
 // ============================================================
 
+// ---- CONSTANTS ----
+const MAX_BLOOD_SUGAR_GAP = 180; // 3 hours max between blood-sugar-stabilizing fuelings
+const WARN_BLOOD_SUGAR_GAP = 170; // warn at 2h50m
+const MIN_BLOOD_SUGAR_GAP = 90;  // too close if < 1.5h
+const MIN_MPS_GAP = 240;         // 4 hours between MPS triggers
+const WARN_MPS_GAP = 210;        // warn at 3.5h
+
 /** Convert "HH:MM" to minutes since midnight */
 export function timeToMin(t) {
   const [h, m] = t.split(":").map(Number);
@@ -25,15 +32,18 @@ export function minToDisplay(m) {
 }
 
 // ---- PRODUCT CATALOG ----
+// Key distinction: stabilizes_blood_sugar tracks whether a fueling controls blood sugar
+// EAA alone does NOT stabilize blood sugar — only MPS trigger
+// Whey, L&G, Essential Fuelings, ASCEND, and Hybrid all DO stabilize blood sugar
 
 export const FUELING_TYPES = [
-  { id: "whey", name: "Whey Protein Shake", category: "high_protein", triggers_mps: true, blood_sugar_impact: "high_stability", is_lean_and_green: false, protein_grams: 25, emoji: "\uD83E\uDD64" },
-  { id: "lg", name: "Lean & Green Meal", category: "high_protein", triggers_mps: true, blood_sugar_impact: "high_stability", is_lean_and_green: true, protein_grams: null, emoji: "\uD83E\uDD57" },
-  { id: "lg_plus", name: "Lean & Green+ Meal", category: "high_protein", triggers_mps: true, blood_sugar_impact: "high_stability", is_lean_and_green: true, protein_grams: null, emoji: "\uD83E\uDD57" },
-  { id: "eaa", name: "Essential Amino Acids", category: "eaa", triggers_mps: true, blood_sugar_impact: "low", is_lean_and_green: false, protein_grams: 3, emoji: "\uD83D\uDCAA" },
-  { id: "ef", name: "Essential Fueling", category: "standard", triggers_mps: false, blood_sugar_impact: "high_stability", is_lean_and_green: false, protein_grams: 11, emoji: "\uD83C\uDF7D\uFE0F" },
-  { id: "hybrid", name: "Essential Fueling + EAA", category: "hybrid", triggers_mps: true, blood_sugar_impact: "high_stability", is_lean_and_green: false, protein_grams: 14, emoji: "\u26A1" },
-  { id: "ascend", name: "ASCEND Mini Meal", category: "ascend", triggers_mps: true, blood_sugar_impact: "high_stability", is_lean_and_green: false, protein_grams: 20, emoji: "\uD83D\uDE80" },
+  { id: "whey", name: "Whey Protein Shake", category: "high_protein", triggers_mps: true, stabilizes_blood_sugar: true, is_lean_and_green: false, protein_grams: 25, emoji: "\uD83E\uDD64" },
+  { id: "lg", name: "Lean & Green Meal", category: "high_protein", triggers_mps: true, stabilizes_blood_sugar: true, is_lean_and_green: true, protein_grams: null, emoji: "\uD83E\uDD57" },
+  { id: "lg_plus", name: "Lean & Green+ Meal", category: "high_protein", triggers_mps: true, stabilizes_blood_sugar: true, is_lean_and_green: true, protein_grams: null, emoji: "\uD83E\uDD57" },
+  { id: "eaa", name: "Essential Amino Acids", category: "eaa", triggers_mps: true, stabilizes_blood_sugar: false, is_lean_and_green: false, protein_grams: 3, emoji: "\uD83D\uDCAA" },
+  { id: "ef", name: "Essential Fueling", category: "standard", triggers_mps: false, stabilizes_blood_sugar: true, is_lean_and_green: false, protein_grams: 11, emoji: "\uD83C\uDF7D\uFE0F" },
+  { id: "hybrid", name: "Essential Fueling + EAA", category: "hybrid", triggers_mps: true, stabilizes_blood_sugar: true, is_lean_and_green: false, protein_grams: 14, emoji: "\u26A1" },
+  { id: "ascend", name: "ASCEND Mini Meal", category: "ascend", triggers_mps: true, stabilizes_blood_sugar: true, is_lean_and_green: false, protein_grams: 20, emoji: "\uD83D\uDE80" },
 ];
 
 export function getFuelingById(id) {
@@ -72,10 +82,10 @@ export const PLAN_TEMPLATES = {
   },
   "GLP1": {
     label: "ASCEND for GLP-1",
-    essential_count: 3,  // 3 ASCEND mini meals (these trigger MPS!)
+    essential_count: 3,
     lean_green_count: 1,
     total_slots: 4,
-    mps_target: 4,       // all 4 slots trigger MPS (3 ASCEND + 1 L&G+)
+    mps_target: 4,
     description: "3 ASCEND Mini Meals + 1 Lean & Green+",
     is_glp1: true,
   },
@@ -83,23 +93,14 @@ export const PLAN_TEMPLATES = {
 
 // ---- SOLVER ----
 
-/**
- * Generates an optimal schedule given profile and workout info.
- *
- * @param {Object} profile - { plan_type, wake_time, sleep_time, priority_mode, athlete_mode }
- * @param {Object|null} workout - { start_time, duration_minutes } (HH:MM strings)
- * @returns {Object} { slots, conflicts, summary }
- */
 export function solve(profile, workout = null) {
   const wakeMin = timeToMin(profile.wake_time);
   const sleepMin = timeToMin(profile.sleep_time);
   const template = PLAN_TEMPLATES[profile.plan_type];
   const isGlp1 = template.is_glp1;
 
-  // Athlete mode: adds a bedtime EAA as the 4th MPS (not for GLP-1, they already have 4 MPS)
   const athleteApplies = profile.athlete_mode && !isGlp1;
   const mpsTarget = athleteApplies ? template.mps_target + 1 : template.mps_target;
-  // Athlete mode doesn't add a fueling slot — the EAA is supplemental, placed at bedtime
   const totalSlots = template.total_slots;
 
   // Compute workout window
@@ -112,24 +113,21 @@ export function solve(profile, workout = null) {
   }
 
   // Usable window
-  const firstSlot = wakeMin + 30; // 30 min after wake
-  const lastSlot = sleepMin - 60; // 1 hour before bed
-  const bedtimeEaaSlot = sleepMin - 30; // 30 min before bed for athlete EAA
+  const firstSlot = wakeMin + 30;
+  const lastSlot = sleepMin - 60;
+  const bedtimeEaaSlot = sleepMin - 30;
 
-  // Step 1: Place MPS slots
   const wakingMins = lastSlot - firstSlot;
   const mpsSlots = [];
-
-  // For athlete mode, reserve the 4th MPS as bedtime EAA (handled separately)
   const mainMpsTarget = athleteApplies ? mpsTarget - 1 : mpsTarget;
 
+  // ---- STEP 1: Place MPS slots ----
+
   if (workoutEnd !== null) {
-    // Place post-workout MPS first
     const postWorkoutTime = Math.min(workoutEnd + 15, anabolicDeadline);
     mpsSlots.push({ time: postWorkoutTime, is_post_workout: true, is_bedtime_eaa: false });
   }
 
-  // Distribute remaining main MPS slots evenly
   const remainingMps = mainMpsTarget - mpsSlots.length;
   if (remainingMps > 0) {
     if (mpsSlots.length > 0) {
@@ -138,24 +136,20 @@ export function solve(profile, workout = null) {
       const afterWindow = lastSlot - pwTime;
       const totalWindow = beforeWindow + afterWindow;
 
-      const beforeCount = Math.round((beforeWindow / totalWindow) * remainingMps);
+      const beforeCount = Math.max(1, Math.round((beforeWindow / totalWindow) * remainingMps));
       const afterCount = remainingMps - beforeCount;
 
-      if (beforeCount > 0) {
-        const gap = beforeWindow / (beforeCount + 1);
-        for (let i = 1; i <= beforeCount; i++) {
-          mpsSlots.push({ time: Math.round(firstSlot + gap * i), is_post_workout: false, is_bedtime_eaa: false });
+      // Place before slots
+      if (beforeCount === 1) {
+        mpsSlots.push({ time: firstSlot, is_post_workout: false, is_bedtime_eaa: false });
+      } else {
+        for (let i = 0; i < beforeCount; i++) {
+          const t = Math.round(firstSlot + (beforeWindow / beforeCount) * i);
+          mpsSlots.push({ time: t, is_post_workout: false, is_bedtime_eaa: false });
         }
       }
 
-      // Ensure first MPS is within 30 min of wake
-      if (beforeCount > 0) {
-        const earliest = mpsSlots.filter(s => !s.is_post_workout && !s.is_bedtime_eaa).sort((a, b) => a.time - b.time);
-        if (earliest.length > 0 && earliest[0].time > firstSlot + 30) {
-          earliest[0].time = firstSlot;
-        }
-      }
-
+      // Place after slots
       if (afterCount > 0) {
         const gap = afterWindow / (afterCount + 1);
         for (let i = 1; i <= afterCount; i++) {
@@ -164,90 +158,61 @@ export function solve(profile, workout = null) {
       }
     } else {
       // No workout — distribute evenly
-      if (isGlp1) {
-        // GLP-1: All 4 slots are MPS triggers, distribute evenly
-        const gap = wakingMins / (remainingMps - 1 || 1);
-        for (let i = 0; i < remainingMps; i++) {
-          mpsSlots.push({ time: Math.round(firstSlot + gap * i), is_post_workout: false, is_bedtime_eaa: false });
-        }
-      } else {
-        // Standard: distribute MPS triggers evenly
-        const gap = wakingMins / (remainingMps - 1 || 1);
-        for (let i = 0; i < remainingMps; i++) {
-          mpsSlots.push({ time: Math.round(firstSlot + gap * i), is_post_workout: false, is_bedtime_eaa: false });
-        }
+      const gap = wakingMins / (remainingMps - 1 || 1);
+      for (let i = 0; i < remainingMps; i++) {
+        mpsSlots.push({ time: Math.round(firstSlot + gap * i), is_post_workout: false, is_bedtime_eaa: false });
       }
     }
   }
 
-  // Sort MPS slots by time
   mpsSlots.sort((a, b) => a.time - b.time);
 
-  // Ensure first MPS is at wake + 30
+  // Ensure first MPS is at firstSlot
   if (mpsSlots.length > 0 && !mpsSlots[0].is_post_workout) {
     mpsSlots[0].time = firstSlot;
   }
 
-  // Step 2: Check for MPS conflicts
+  // ---- STEP 2: Check for MPS conflicts ----
   const conflicts = [];
   for (let i = 1; i < mpsSlots.length; i++) {
     const gap = mpsSlots[i].time - mpsSlots[i - 1].time;
-    if (gap < 240) {
-      conflicts.push({
-        type: "mps_too_close",
-        slot_a_index: i - 1,
-        slot_b_index: i,
-        gap_minutes: gap,
-        severity: gap < 210 ? "red" : "yellow",
-      });
+    if (gap < MIN_MPS_GAP) {
+      conflicts.push({ type: "mps_too_close", slot_a_index: i - 1, slot_b_index: i, gap_minutes: gap, severity: gap < WARN_MPS_GAP ? "red" : "yellow" });
     }
   }
 
-  // Step 3: Apply priority resolution if conflicts exist
+  // ---- STEP 3: Apply priority resolution ----
   if (conflicts.length > 0 && workout) {
     const pwIdx = mpsSlots.findIndex(s => s.is_post_workout);
-
-    if (profile.priority_mode === "performance") {
-      // Keep post-workout in anabolic window, accept short MPS gap
-    } else if (profile.priority_mode === "metabolic") {
-      // Push post-workout to maintain 4h gap
-      if (pwIdx > 0) {
-        const prevMps = mpsSlots[pwIdx - 1].time;
-        const safeTime = prevMps + 240;
-        if (safeTime <= lastSlot) {
-          mpsSlots[pwIdx].time = safeTime;
-          mpsSlots[pwIdx].pushed = true;
-        }
+    if (profile.priority_mode === "metabolic" && pwIdx > 0) {
+      const prevMps = mpsSlots[pwIdx - 1].time;
+      const safeTime = prevMps + MIN_MPS_GAP;
+      if (safeTime <= lastSlot) {
+        mpsSlots[pwIdx].time = safeTime;
+        mpsSlots[pwIdx].pushed = true;
       }
     }
     mpsSlots.sort((a, b) => a.time - b.time);
   }
 
-  // Step 4: Build all slots with fueling assignments
+  // ---- STEP 4: Assign fueling types to MPS slots ----
   const allSlots = [];
   const lgCount = template.lean_green_count;
-
-  // Assign fueling types to MPS slots
   let lgAssigned = 0;
+
   for (let i = 0; i < mpsSlots.length; i++) {
     const mps = mpsSlots[i];
     let fuelingId;
 
     if (isGlp1) {
-      // GLP-1: ASCEND mini meals for most, L&G+ for one
       if (lgAssigned < lgCount && i === Math.floor(mpsSlots.length / 2)) {
-        // Place L&G+ roughly in the middle of the day
         fuelingId = "lg_plus";
         lgAssigned++;
       } else {
         fuelingId = "ascend";
       }
-      // Post-workout still gets a high-protein option
-      if (mps.is_post_workout) {
-        fuelingId = "ascend";
-      }
+      if (mps.is_post_workout) fuelingId = "ascend";
     } else {
-      // Standard plans
       if (i === 0) {
         fuelingId = "whey";
       } else if (lgAssigned < lgCount) {
@@ -256,9 +221,7 @@ export function solve(profile, workout = null) {
       } else {
         fuelingId = "whey";
       }
-      if (mps.is_post_workout) {
-        fuelingId = "whey";
-      }
+      if (mps.is_post_workout) fuelingId = "whey";
     }
 
     allSlots.push({
@@ -271,45 +234,92 @@ export function solve(profile, workout = null) {
     });
   }
 
-  // Fill standard fuelings between MPS slots (not needed for GLP-1 — all slots are MPS)
-  const fillerSlots = [];
+  // ---- STEP 5: Fill blood-sugar slots to guarantee no gap > 3 hours ----
+  // This is the critical fix: we don't just fill a fixed number of slots,
+  // we fill UNTIL no blood-sugar gap exceeds 3 hours.
+
+  let finalSlots = [...allSlots].sort((a, b) => a.time - b.time);
+
   if (!isGlp1) {
-    const sortedMps = [...allSlots].sort((a, b) => a.time - b.time);
-    const fillersNeeded = totalSlots - sortedMps.length;
+    // For standard plans, we need to place Essential Fuelings
+    // Strategy: repeatedly find the largest blood-sugar gap and insert a filler
+    const maxFillers = totalSlots - finalSlots.length;
+    let fillersPlaced = 0;
 
-    if (fillersNeeded > 0) {
-      const points = [firstSlot, ...sortedMps.map(s => s.time), lastSlot];
-      const gaps = [];
-      for (let i = 0; i < points.length - 1; i++) {
-        gaps.push({ start: points[i], end: points[i + 1], size: points[i + 1] - points[i], idx: i });
-      }
-      gaps.sort((a, b) => b.size - a.size);
+    for (let pass = 0; pass < maxFillers + 5; pass++) {
+      if (fillersPlaced >= maxFillers) break;
 
-      let fillersPlaced = 0;
-      for (const gap of gaps) {
-        if (fillersPlaced >= fillersNeeded) break;
-        const count = gap.size > 300 ? 2 : 1;
-        const actual = Math.min(count, fillersNeeded - fillersPlaced);
-        for (let j = 1; j <= actual; j++) {
-          const t = Math.round(gap.start + (gap.size / (actual + 1)) * j);
-          fillerSlots.push({
-            time: t,
-            fueling_id: "ef",
-            is_mps_trigger: false,
-            is_post_workout: false,
-            is_bedtime_eaa: false,
-            pushed: false,
-          });
-          fillersPlaced++;
-        }
+      // Find the largest gap between blood-sugar-stabilizing slots
+      const bsSlots = finalSlots.filter(s => {
+        const f = getFuelingById(s.fueling_id);
+        return f?.stabilizes_blood_sugar;
+      });
+
+      // Include boundaries: first fueling should be near wake, last near lastSlot
+      let worstGap = 0;
+      let worstStart = 0;
+      let worstEnd = 0;
+
+      // Check gap from wake to first BS slot
+      if (bsSlots.length > 0 && bsSlots[0].time - wakeMin > MAX_BLOOD_SUGAR_GAP) {
+        const g = bsSlots[0].time - wakeMin;
+        if (g > worstGap) { worstGap = g; worstStart = wakeMin; worstEnd = bsSlots[0].time; }
       }
+
+      // Check gaps between consecutive BS slots
+      for (let i = 1; i < bsSlots.length; i++) {
+        const g = bsSlots[i].time - bsSlots[i - 1].time;
+        if (g > worstGap) { worstGap = g; worstStart = bsSlots[i - 1].time; worstEnd = bsSlots[i].time; }
+      }
+
+      // Check gap from last BS slot to sleep
+      if (bsSlots.length > 0) {
+        const g = sleepMin - bsSlots[bsSlots.length - 1].time;
+        if (g > worstGap) { worstGap = g; worstStart = bsSlots[bsSlots.length - 1].time; worstEnd = sleepMin; }
+      }
+
+      if (worstGap <= MAX_BLOOD_SUGAR_GAP) break; // All gaps are good!
+
+      // Insert a filler at the midpoint of the worst gap
+      const midpoint = Math.round((worstStart + worstEnd) / 2);
+      finalSlots.push({
+        time: midpoint,
+        fueling_id: "ef",
+        is_mps_trigger: false,
+        is_post_workout: false,
+        is_bedtime_eaa: false,
+        pushed: false,
+      });
+      finalSlots.sort((a, b) => a.time - b.time);
+      fillersPlaced++;
+    }
+
+    // If we still have filler budget and gaps > 2.5h, keep filling
+    while (fillersPlaced < maxFillers) {
+      const bsSlots = finalSlots.filter(s => getFuelingById(s.fueling_id)?.stabilizes_blood_sugar);
+      let worstGap = 0, worstStart = 0, worstEnd = 0;
+      for (let i = 1; i < bsSlots.length; i++) {
+        const g = bsSlots[i].time - bsSlots[i - 1].time;
+        if (g > worstGap) { worstGap = g; worstStart = bsSlots[i - 1].time; worstEnd = bsSlots[i].time; }
+      }
+      if (worstGap < 150) break; // gaps are small enough
+      const midpoint = Math.round((worstStart + worstEnd) / 2);
+      finalSlots.push({
+        time: midpoint,
+        fueling_id: "ef",
+        is_mps_trigger: false,
+        is_post_workout: false,
+        is_bedtime_eaa: false,
+        pushed: false,
+      });
+      finalSlots.sort((a, b) => a.time - b.time);
+      fillersPlaced++;
     }
   }
 
-  // Combine and sort
-  let finalSlots = [...allSlots, ...fillerSlots].sort((a, b) => a.time - b.time);
-
-  // Step 4b: Add bedtime EAA for athlete mode
+  // ---- STEP 5b: Add bedtime EAA for athlete mode ----
+  // EAA doesn't stabilize blood sugar, so we pair it: if the gap from the last
+  // blood-sugar slot to bedtime EAA is > 3h, the solver already placed a filler above.
   if (athleteApplies) {
     finalSlots.push({
       time: bedtimeEaaSlot,
@@ -322,13 +332,13 @@ export function solve(profile, workout = null) {
     finalSlots.sort((a, b) => a.time - b.time);
   }
 
-  // Step 5: Evaluate each slot
+  // ---- STEP 6: Evaluate each slot ----
   const evaluatedSlots = finalSlots.map((slot, i) => {
     const prev = i > 0 ? finalSlots[i - 1] : null;
     const next = i < finalSlots.length - 1 ? finalSlots[i + 1] : null;
     return {
       ...slot,
-      ...evaluateSlot(slot, prev, next, workout, { wakeMin, sleepMin, workoutEnd, anabolicDeadline }),
+      ...evaluateSlot(slot, prev, next, finalSlots, workout, { wakeMin, sleepMin, workoutEnd, anabolicDeadline }),
       slot_index: i,
     };
   });
@@ -338,19 +348,20 @@ export function solve(profile, workout = null) {
   for (let i = 1; i < evaluatedSlots.length; i++) {
     if (evaluatedSlots[i].is_mps_trigger && evaluatedSlots[i - 1].is_mps_trigger) {
       const gap = evaluatedSlots[i].time - evaluatedSlots[i - 1].time;
-      if (gap < 240) {
-        finalConflicts.push({
-          type: "mps_too_close",
-          slot_a_index: i - 1,
-          slot_b_index: i,
-          gap_minutes: gap,
-          severity: gap < 210 ? "red" : "yellow",
-        });
+      if (gap < MIN_MPS_GAP) {
+        finalConflicts.push({ type: "mps_too_close", slot_a_index: i - 1, slot_b_index: i, gap_minutes: gap, severity: gap < WARN_MPS_GAP ? "red" : "yellow" });
       }
     }
   }
 
-  // Summary
+  // ---- SUMMARY ----
+  // Blood sugar gaps: only count gaps between blood-sugar-STABILIZING slots
+  const bsStabilizing = evaluatedSlots.filter(s => getFuelingById(s.fueling_id)?.stabilizes_blood_sugar);
+  const bloodSugarGaps = [];
+  for (let i = 1; i < bsStabilizing.length; i++) {
+    bloodSugarGaps.push(bsStabilizing[i].time - bsStabilizing[i - 1].time);
+  }
+
   const mpsGaps = [];
   let prevMpsTime = null;
   for (const s of evaluatedSlots) {
@@ -358,11 +369,6 @@ export function solve(profile, workout = null) {
       if (prevMpsTime !== null) mpsGaps.push(s.time - prevMpsTime);
       prevMpsTime = s.time;
     }
-  }
-
-  const bloodSugarGaps = [];
-  for (let i = 1; i < evaluatedSlots.length; i++) {
-    bloodSugarGaps.push(evaluatedSlots[i].time - evaluatedSlots[i - 1].time);
   }
 
   const worstStatus = evaluatedSlots.reduce((w, s) => {
@@ -393,7 +399,7 @@ export function solve(profile, workout = null) {
 
 // ---- SLOT EVALUATOR ----
 
-function evaluateSlot(slot, prev, next, workout, ctx) {
+function evaluateSlot(slot, prev, next, allSlots, workout, ctx) {
   const reasons = [];
   let worstStatus = "green";
 
@@ -402,35 +408,58 @@ function evaluateSlot(slot, prev, next, workout, ctx) {
     else if (s === "yellow" && worstStatus !== "red") worstStatus = "yellow";
   };
 
-  // MPS gap check (backward)
-  if (slot.is_mps_trigger && prev?.is_mps_trigger) {
-    const gap = slot.time - prev.time;
-    if (gap < 210) {
-      escalate("red");
-      reasons.push({ rule: "mps_gap", gap_minutes: gap, status: "fail" });
-    } else if (gap < 240) {
-      escalate("yellow");
-      reasons.push({ rule: "mps_gap", gap_minutes: gap, status: "warn" });
-    } else {
-      reasons.push({ rule: "mps_gap", gap_minutes: gap, status: "ok" });
+  const fueling = getFuelingById(slot.fueling_id);
+  const slotStabilizesBs = fueling?.stabilizes_blood_sugar;
+
+  // MPS gap check (backward) — find previous MPS slot
+  if (slot.is_mps_trigger) {
+    const slotIdx = allSlots.indexOf(slot);
+    let prevMps = null;
+    for (let i = slotIdx - 1; i >= 0; i--) {
+      if (allSlots[i].is_mps_trigger) { prevMps = allSlots[i]; break; }
+    }
+    if (prevMps) {
+      const gap = slot.time - prevMps.time;
+      if (gap < WARN_MPS_GAP) {
+        escalate("red");
+        reasons.push({ rule: "mps_gap", gap_minutes: gap, status: "fail" });
+      } else if (gap < MIN_MPS_GAP) {
+        escalate("yellow");
+        reasons.push({ rule: "mps_gap", gap_minutes: gap, status: "warn" });
+      } else {
+        reasons.push({ rule: "mps_gap", gap_minutes: gap, status: "ok" });
+      }
     }
   }
 
-  // Blood sugar gap (backward) — skip for bedtime EAA (it's supplemental, not a meal)
-  if (prev && !slot.is_bedtime_eaa) {
-    const gap = slot.time - prev.time;
-    if (gap > 240) {
-      escalate("red");
-      reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "fail" });
-    } else if (gap > 210) {
-      escalate("yellow");
-      reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "warn" });
-    } else if (gap < 90) {
-      escalate("yellow");
-      reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "warn" });
-    } else {
-      reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "ok" });
+  // Blood sugar gap check — find previous blood-sugar-stabilizing slot
+  if (slotStabilizesBs) {
+    const slotIdx = allSlots.indexOf(slot);
+    let prevBs = null;
+    for (let i = slotIdx - 1; i >= 0; i--) {
+      const pf = getFuelingById(allSlots[i].fueling_id);
+      if (pf?.stabilizes_blood_sugar) { prevBs = allSlots[i]; break; }
     }
+    if (prevBs) {
+      const gap = slot.time - prevBs.time;
+      if (gap > MAX_BLOOD_SUGAR_GAP) {
+        escalate("red");
+        reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "fail" });
+      } else if (gap > WARN_BLOOD_SUGAR_GAP) {
+        escalate("yellow");
+        reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "warn" });
+      } else if (gap < MIN_BLOOD_SUGAR_GAP) {
+        escalate("yellow");
+        reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "warn" });
+      } else {
+        reasons.push({ rule: "blood_sugar_gap", gap_minutes: gap, status: "ok" });
+      }
+    }
+  }
+
+  // EAA-only slot: note that it doesn't control blood sugar
+  if (slot.is_bedtime_eaa) {
+    reasons.push({ rule: "eaa_note", status: "ok" });
   }
 
   // Anabolic window check
