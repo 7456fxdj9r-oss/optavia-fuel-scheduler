@@ -116,7 +116,7 @@ function SetupPanel({ profile, setProfile, workout, setWorkout, goal, setGoal })
           </p>
         </div>
 
-        {/* Wake / Sleep */}
+        {/* Wake / Sleep / L&G Dinner */}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">{"\uD83C\uDF05"} Wake Up</label>
@@ -131,6 +131,19 @@ function SetupPanel({ profile, setProfile, workout, setWorkout, goal, setGoal })
               className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" />
           </div>
         </div>
+
+        {/* Preferred L&G Time */}
+        {template.lean_green_count > 0 && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              {"\uD83E\uDD57"} When do you want your Lean & Green?
+            </label>
+            <input type="time" value={profile.lg_preferred_time || "18:00"}
+              onChange={(e) => setProfile(p => ({ ...p, lg_preferred_time: e.target.value }))}
+              className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" />
+            <p className="text-[10px] text-gray-400 mt-1">Most people prefer dinner time (4-7 PM). The scheduler will place your L&G here.</p>
+          </div>
+        )}
 
         {/* Workout */}
         <div className="border-t pt-4">
@@ -182,9 +195,9 @@ function SetupPanel({ profile, setProfile, workout, setWorkout, goal, setGoal })
 }
 
 // ============================================================
-// WHAT-IF TOGGLES
+// WHAT-IF TOGGLES (uses plain object, not Set, for reliable React state)
 // ============================================================
-function WhatIfToggles({ activeWhatIfs, setActiveWhatIfs, hasWorkout }) {
+function WhatIfToggles({ activeWhatIfs, toggleWhatIf, clearWhatIfs, hasWorkout }) {
   const scenarios = [
     { key: "wake_earlier", label: "Wake 30m earlier", emoji: "\u23F0", show: true },
     { key: "wake_later", label: "Wake 30m later", emoji: "\uD83D\uDCA4", show: true },
@@ -197,36 +210,29 @@ function WhatIfToggles({ activeWhatIfs, setActiveWhatIfs, hasWorkout }) {
   ];
 
   const visible = scenarios.filter(s => s.show);
-  const toggle = (key) => {
-    setActiveWhatIfs(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
+  const anyActive = Object.values(activeWhatIfs).some(v => v);
 
   return (
     <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
       <div className="bg-gradient-to-r from-sky-600 to-cyan-600 px-6 py-3 flex items-center justify-between">
         <h2 className="text-white text-sm font-semibold flex items-center gap-2">{"\uD83E\uDD14"} What If...</h2>
-        {activeWhatIfs.size > 0 && (
-          <button onClick={() => setActiveWhatIfs(new Set())}
+        {anyActive && (
+          <button onClick={clearWhatIfs}
             className="text-[10px] text-sky-200 hover:text-white font-medium transition-colors">
-            Reset all
+            Clear all
           </button>
         )}
       </div>
       <div className="p-4 flex flex-wrap gap-2">
         {visible.map(s => {
-          const isActive = activeWhatIfs.has(s.key);
+          const isActive = !!activeWhatIfs[s.key];
           return (
-            <button key={s.key} onClick={() => toggle(s.key)}
-              className={`px-3 py-2 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 border ${isActive
-                ? "bg-indigo-100 border-indigo-400 text-indigo-800 shadow-md ring-1 ring-indigo-300"
+            <button key={s.key} onClick={() => toggleWhatIf(s.key)}
+              className={`px-3 py-2 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 border-2 ${isActive
+                ? "bg-indigo-600 border-indigo-600 text-white shadow-lg scale-105"
                 : "bg-gray-50 hover:bg-indigo-50 border-gray-200 hover:border-indigo-300 text-gray-700 hover:text-indigo-700"}`}>
               <span>{s.emoji}</span> {s.label}
-              {isActive && <span className="ml-1 text-indigo-500">{"\u2713"}</span>}
+              {isActive && <span className="ml-1 opacity-80">ON</span>}
             </button>
           );
         })}
@@ -561,67 +567,75 @@ function ConflictPanel({ conflicts, profile, setProfile, goal }) {
 // ============================================================
 // ============================================================
 // WHAT-IF LOGIC: applies toggles to base profile/workout
+// activeWhatIfs is a plain object like { wake_earlier: true, workout_later: true }
 // ============================================================
 function applyWhatIfs(baseProfile, baseWorkout, activeWhatIfs) {
   let profile = { ...baseProfile };
   let workout = baseWorkout ? { ...baseWorkout } : null;
 
-  for (const key of activeWhatIfs) {
-    switch (key) {
-      case "wake_earlier": {
-        const cur = timeToMin(profile.wake_time);
-        profile.wake_time = minToTime(Math.max(240, cur - 30));
-        break;
-      }
-      case "wake_later": {
-        const cur = timeToMin(profile.wake_time);
-        profile.wake_time = minToTime(cur + 30);
-        break;
-      }
-      case "sleep_later": {
-        const cur = timeToMin(profile.sleep_time);
-        profile.sleep_time = minToTime(Math.min(1440 - 30, cur + 60));
-        break;
-      }
-      case "add_workout":
-        if (!workout) workout = { start_time: "12:00", duration_minutes: 60 };
-        break;
-      case "workout_earlier":
-        if (workout) {
-          const cur = timeToMin(workout.start_time);
-          workout.start_time = minToTime(Math.max(timeToMin(profile.wake_time) + 60, cur - 60));
-        }
-        break;
-      case "workout_later":
-        if (workout) {
-          const cur = timeToMin(workout.start_time);
-          workout.start_time = minToTime(Math.min(timeToMin(profile.sleep_time) - 120, cur + 60));
-        }
-        break;
-      case "no_workout":
-        workout = null;
-        break;
-      case "athlete_mode":
-        profile.athlete_mode = !profile.athlete_mode;
-        break;
-    }
+  // Only apply keys that are truthy (toggled ON)
+  if (activeWhatIfs.wake_earlier) {
+    const cur = timeToMin(profile.wake_time);
+    profile.wake_time = minToTime(Math.max(240, cur - 30));
+  }
+  if (activeWhatIfs.wake_later) {
+    const cur = timeToMin(profile.wake_time);
+    profile.wake_time = minToTime(cur + 30);
+  }
+  if (activeWhatIfs.sleep_later) {
+    const cur = timeToMin(profile.sleep_time);
+    profile.sleep_time = minToTime(Math.min(1440 - 30, cur + 60));
+  }
+  if (activeWhatIfs.add_workout && !workout) {
+    workout = { start_time: "12:00", duration_minutes: 60 };
+  }
+  if (activeWhatIfs.workout_earlier && workout) {
+    const cur = timeToMin(workout.start_time);
+    workout = { ...workout, start_time: minToTime(Math.max(timeToMin(profile.wake_time) + 60, cur - 60)) };
+  }
+  if (activeWhatIfs.workout_later && workout) {
+    const cur = timeToMin(workout.start_time);
+    workout = { ...workout, start_time: minToTime(Math.min(timeToMin(profile.sleep_time) - 120, cur + 60)) };
+  }
+  if (activeWhatIfs.no_workout) {
+    workout = null;
+  }
+  if (activeWhatIfs.athlete_mode) {
+    profile.athlete_mode = !profile.athlete_mode;
   }
 
   return { profile, workout };
 }
 
-export default function App() {
-  const [baseProfile, setBaseProfile] = useState({
-    plan_type: "5&1",
-    wake_time: "06:30",
-    sleep_time: "22:00",
-    priority_mode: "performance",
-    athlete_mode: false,
-  });
+// Default profile values for reset
+const DEFAULT_PROFILE = {
+  plan_type: "5&1",
+  wake_time: "06:30",
+  sleep_time: "22:00",
+  priority_mode: "performance",
+  athlete_mode: false,
+  lg_preferred_time: "18:00",
+};
 
+export default function App() {
+  const [baseProfile, setBaseProfile] = useState({ ...DEFAULT_PROFILE });
   const [baseWorkout, setBaseWorkout] = useState(null);
   const [goal, setGoal] = useState("balanced");
-  const [activeWhatIfs, setActiveWhatIfs] = useState(new Set());
+  const [activeWhatIfs, setActiveWhatIfs] = useState({});
+
+  // Toggle a what-if on/off (plain object for reliable React state updates)
+  const toggleWhatIf = (key) => {
+    setActiveWhatIfs(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+  const clearWhatIfs = () => setActiveWhatIfs({});
+
+  // Full reset to defaults
+  const resetAll = () => {
+    setBaseProfile({ ...DEFAULT_PROFILE });
+    setBaseWorkout(null);
+    setGoal("balanced");
+    setActiveWhatIfs({});
+  };
 
   // Compute effective profile/workout with what-ifs applied
   const { profile, workout } = useMemo(
@@ -663,23 +677,29 @@ export default function App() {
               <p className="text-[10px] text-gray-500">{PLAN_TEMPLATES[profile.plan_type].label} &middot; {GOAL_MODES[goal].label}</p>
             </div>
           </div>
-          <div className={`px-3 py-1.5 rounded-full text-xs font-semibold ${STATUS_COLORS[result.summary.overall_status].bg} ${STATUS_COLORS[result.summary.overall_status].text}`}>
-            {result.summary.overall_status === "green" ? "\u2705" : result.summary.overall_status === "yellow" ? "\u26A0\uFE0F" : "\u274C"}{" "}
-            {STATUS_LABELS[result.summary.overall_status]}
+          <div className="flex items-center gap-2">
+            <button onClick={resetAll}
+              className="px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 hover:bg-red-50 hover:text-red-600 border border-gray-200 hover:border-red-300 transition-all">
+              {"\uD83D\uDD04"} Reset
+            </button>
+            <div className={`px-3 py-1.5 rounded-full text-xs font-semibold ${STATUS_COLORS[result.summary.overall_status].bg} ${STATUS_COLORS[result.summary.overall_status].text}`}>
+              {result.summary.overall_status === "green" ? "\u2705" : result.summary.overall_status === "yellow" ? "\u26A0\uFE0F" : "\u274C"}{" "}
+              {STATUS_LABELS[result.summary.overall_status]}
+            </div>
           </div>
         </div>
       </header>
 
       {/* What-If Active Banner */}
-      {activeWhatIfs.size > 0 && (
+      {Object.values(activeWhatIfs).some(v => v) && (
         <div className="bg-indigo-50 border-b border-indigo-200 px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs text-indigo-700">
+          <div className="flex items-center gap-2 text-xs text-indigo-700 flex-wrap">
             <span className="font-bold">{"\uD83E\uDD14"} What-If Preview:</span>
-            {[...activeWhatIfs].map(k => (
+            {Object.entries(activeWhatIfs).filter(([,v]) => v).map(([k]) => (
               <span key={k} className="px-2 py-0.5 bg-indigo-100 rounded-full text-[10px] font-semibold">{k.replace(/_/g, " ")}</span>
             ))}
           </div>
-          <button onClick={() => setActiveWhatIfs(new Set())}
+          <button onClick={clearWhatIfs}
             className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
             Clear all
           </button>
@@ -704,7 +724,7 @@ export default function App() {
           <Summary result={result} />
 
           {/* What-If Toggles */}
-          <WhatIfToggles activeWhatIfs={activeWhatIfs} setActiveWhatIfs={setActiveWhatIfs} hasWorkout={baseWorkout !== null} />
+          <WhatIfToggles activeWhatIfs={activeWhatIfs} toggleWhatIf={toggleWhatIf} clearWhatIfs={clearWhatIfs} hasWorkout={baseWorkout !== null} />
 
           {/* Timeline */}
           <Timeline result={result} />

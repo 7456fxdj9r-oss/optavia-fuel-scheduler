@@ -278,12 +278,43 @@ export function solve(profile, workout = null) {
     const fillerCount = coreSlotCount - mpsTarget; // non-MPS slots to place
 
     // ---- STEP 1a: Place MPS anchor points ----
-    // Distribute 3 MPS triggers evenly across waking window
-    const mpsGap = wakingMins / (mpsTarget - 1 || 1);
+    // MPS 1 = first slot (whey at wake+30)
+    // MPS 2 = L&G at preferred dinner time (default 6 PM)
+    // MPS 3 = evenly between MPS 1 and L&G, or after L&G if not enough room
+    const lgPreferredMin = profile.lg_preferred_time ? timeToMin(profile.lg_preferred_time) : null;
+
     const mpsTimes = [];
-    for (let i = 0; i < mpsTarget; i++) {
-      mpsTimes.push(Math.round(firstSlot + mpsGap * i));
+    // MPS 1: always at firstSlot (whey breakfast)
+    mpsTimes.push(firstSlot);
+
+    if (mpsTarget >= 2) {
+      if (lgPreferredMin && lgPreferredMin >= firstSlot && lgPreferredMin <= lastSlot) {
+        // MPS 2: at L&G preferred time
+        mpsTimes.push(lgPreferredMin);
+      } else {
+        // Fallback: evenly distributed
+        mpsTimes.push(Math.round(firstSlot + wakingMins / 2));
+      }
     }
+
+    if (mpsTarget >= 3) {
+      // MPS 3: find the largest gap between existing MPS and place it there
+      mpsTimes.sort((a, b) => a - b);
+      let maxGap = 0, gapStart = 0, gapEnd = 0;
+      for (let i = 1; i < mpsTimes.length; i++) {
+        const g = mpsTimes[i] - mpsTimes[i - 1];
+        if (g > maxGap) { maxGap = g; gapStart = mpsTimes[i - 1]; gapEnd = mpsTimes[i]; }
+      }
+      // Also check gap after last MPS to end of day
+      const endGap = lastSlot - mpsTimes[mpsTimes.length - 1];
+      if (endGap > maxGap) {
+        mpsTimes.push(Math.round(mpsTimes[mpsTimes.length - 1] + endGap / 2));
+      } else {
+        mpsTimes.push(Math.round((gapStart + gapEnd) / 2));
+      }
+    }
+
+    mpsTimes.sort((a, b) => a - b);
 
     // ---- STEP 1b: If workout, move the nearest MPS to post-workout ----
     let postWorkoutMpsIdx = -1;
@@ -347,12 +378,29 @@ export function solve(profile, workout = null) {
     // Now place all slots: MPS anchors are already set, fill gaps evenly
     const finalSlotList = [];
 
-    // Add MPS slots
+    // Add MPS slots — assign L&G to the slot closest to preferred L&G time
     let lgAssigned = 0;
+
+    // Find which MPS slot is closest to the L&G preferred time
+    const lgTargetTime = lgPreferredMin || Math.round(firstSlot + wakingMins * 0.7);
+    let bestLgIdx = -1;
+    let bestLgDist = Infinity;
+    for (let i = 0; i < mpsWithMeta.length; i++) {
+      // Don't assign L&G to post-workout (that should be whey)
+      if (mpsWithMeta[i].isPostWorkout) continue;
+      // Don't assign L&G to first slot (that should be whey breakfast)
+      if (i === 0 && mpsWithMeta.length > 1) continue;
+      const dist = Math.abs(mpsWithMeta[i].time - lgTargetTime);
+      if (dist < bestLgDist) { bestLgDist = dist; bestLgIdx = i; }
+    }
+
     for (let i = 0; i < mpsWithMeta.length; i++) {
       let fuelingId;
       if (mpsWithMeta[i].isPostWorkout) {
         fuelingId = "whey";
+      } else if (i === bestLgIdx && lgAssigned < lgCount) {
+        fuelingId = template.lean_green_type;
+        lgAssigned++;
       } else if (i === 0) {
         fuelingId = "whey";
       } else if (lgAssigned < lgCount) {
