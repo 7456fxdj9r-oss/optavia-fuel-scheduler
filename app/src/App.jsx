@@ -69,7 +69,7 @@ function SetupPanel({ profile, setProfile, workout, setWorkout, goal, setGoal })
                 setGoal(key);
                 setProfile(p => ({ ...p, priority_mode: mode.priority_mode }));
                 if (key === "muscle" && !workout) {
-                  setWorkout({ start_time: "12:00", duration_minutes: 60 });
+                  setWorkout({ start_time: "08:00", duration_minutes: 60 });
                 }
               }}
                 className={`p-3 rounded-xl text-center transition-all ${goal === key
@@ -149,7 +149,7 @@ function SetupPanel({ profile, setProfile, workout, setWorkout, goal, setGoal })
         <div className="border-t pt-4">
           <label className="flex items-center gap-3 mb-3 cursor-pointer">
             <input type="checkbox" checked={workout !== null}
-              onChange={(e) => setWorkout(e.target.checked ? { start_time: "12:00", duration_minutes: 60 } : null)}
+              onChange={(e) => setWorkout(e.target.checked ? { start_time: "08:00", duration_minutes: 60 } : null)}
               className="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500" />
             <span className="text-sm font-medium text-gray-700">{"\uD83C\uDFBD"} I'm working out today</span>
             <InfoTip text={TOOLTIPS.anabolic} />
@@ -587,7 +587,7 @@ function applyWhatIfs(baseProfile, baseWorkout, activeWhatIfs) {
     profile.sleep_time = minToTime(Math.min(1440 - 30, cur + 60));
   }
   if (activeWhatIfs.add_workout && !workout) {
-    workout = { start_time: "12:00", duration_minutes: 60 };
+    workout = { start_time: "08:00", duration_minutes: 60 };
   }
   if (activeWhatIfs.workout_earlier && workout) {
     const cur = timeToMin(workout.start_time);
