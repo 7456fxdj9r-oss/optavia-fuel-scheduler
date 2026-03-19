@@ -162,24 +162,24 @@ export const PLAN_TEMPLATES = {
 // ---- GOAL MODES ----
 // Maps user-friendly goal to solver behavior
 export const GOAL_MODES = {
-  muscle: {
-    label: "Build Muscle",
-    emoji: "\uD83C\uDFCB\uFE0F",
-    description: "Prioritize the 30-min anabolic window post-workout. MPS gap may be shorter.",
-    priority_mode: "performance",
-    implies_workout: true,
-  },
   fat_loss: {
     label: "Lose Fat",
     emoji: "\uD83D\uDD25",
-    description: "Prioritize steady blood sugar and strict 4-hour MPS spacing.",
+    description: "Even meal spacing for steady blood sugar. Strict 4-hour protein spacing to maximize fat burning.",
     priority_mode: "metabolic",
     implies_workout: false,
   },
-  balanced: {
-    label: "Just Follow the Plan",
-    emoji: "\u2705",
-    description: "Balanced defaults. Even spacing, MPS hits naturally.",
+  muscle: {
+    label: "Build Muscle",
+    emoji: "\uD83C\uDFCB\uFE0F",
+    description: "Hit the 30-min post-workout protein window to maximize muscle growth. Protein spacing may tighten.",
+    priority_mode: "performance",
+    implies_workout: true,
+  },
+  maintain: {
+    label: "Maintain",
+    emoji: "\u2696\uFE0F",
+    description: "Balanced spacing to maintain your weight. No workout pressure, just stay consistent with your plan.",
     priority_mode: "metabolic",
     implies_workout: false,
   },

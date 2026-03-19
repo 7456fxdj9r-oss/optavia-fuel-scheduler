@@ -620,7 +620,7 @@ const DEFAULT_PROFILE = {
 export default function App() {
   const [baseProfile, setBaseProfile] = useState({ ...DEFAULT_PROFILE });
   const [baseWorkout, setBaseWorkout] = useState(null);
-  const [goal, setGoal] = useState("balanced");
+  const [goal, setGoal] = useState("fat_loss");
   const [activeWhatIfs, setActiveWhatIfs] = useState({});
 
   // Toggle a what-if on/off (plain object for reliable React state updates)
@@ -633,7 +633,7 @@ export default function App() {
   const resetAll = () => {
     setBaseProfile({ ...DEFAULT_PROFILE });
     setBaseWorkout(null);
-    setGoal("balanced");
+    setGoal("fat_loss");
     setActiveWhatIfs({});
   };
 
