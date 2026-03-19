@@ -280,7 +280,7 @@ export function solve(profile, workout = null) {
     // ---- STEP 1a: Place MPS anchor points ----
     // MPS 1 = first slot (whey at wake+30)
     // MPS 2 = L&G at preferred dinner time (default 6 PM)
-    // MPS 3 = evenly between MPS 1 and L&G, or after L&G if not enough room
+    // MPS 3 = placed in the largest gap to maximize even spacing
     const lgPreferredMin = profile.lg_preferred_time ? timeToMin(profile.lg_preferred_time) : null;
 
     const mpsTimes = [];
@@ -288,9 +288,10 @@ export function solve(profile, workout = null) {
     mpsTimes.push(firstSlot);
 
     if (mpsTarget >= 2) {
-      if (lgPreferredMin && lgPreferredMin >= firstSlot && lgPreferredMin <= lastSlot) {
-        // MPS 2: at L&G preferred time
-        mpsTimes.push(lgPreferredMin);
+      if (lgPreferredMin && lgPreferredMin <= lastSlot) {
+        // Clamp L&G time: must be at least MIN_MPS_GAP from first MPS
+        const clampedLg = Math.max(firstSlot + MIN_MPS_GAP, Math.min(lgPreferredMin, lastSlot));
+        mpsTimes.push(clampedLg);
       } else {
         // Fallback: evenly distributed
         mpsTimes.push(Math.round(firstSlot + wakingMins / 2));
@@ -331,21 +332,28 @@ export function solve(profile, workout = null) {
     }
 
     // Sort MPS times (workout may have moved one out of order)
-    const mpsWithMeta = mpsTimes.map((t, i) => ({
+    // Track post-workout by matching the moved time, not the pre-sort index
+    const postWorkoutTime = postWorkoutMpsIdx >= 0 ? mpsTimes[postWorkoutMpsIdx] : null;
+    mpsTimes.sort((a, b) => a - b);
+    const mpsWithMeta = mpsTimes.map(t => ({
       time: t,
-      isPostWorkout: i === postWorkoutMpsIdx,
+      isPostWorkout: postWorkoutTime !== null && t === postWorkoutTime,
     }));
-    mpsWithMeta.sort((a, b) => a.time - b.time);
 
     // ---- STEP 1c: Fill gaps between MPS anchors with filler slots ----
-    // Create segments: [firstSlot ... mps1 ... mps2 ... mps3 ... lastSlot]
-    // Distribute fillers into segments proportional to segment duration
-    const boundaries = [firstSlot, ...mpsWithMeta.map(m => m.time), lastSlot];
+    // Create segments between consecutive MPS anchors (not between firstSlot and first MPS,
+    // since MPS 1 IS at firstSlot — avoid zero-duration segments)
+    const uniqueBoundaries = [...new Set([...mpsWithMeta.map(m => m.time), lastSlot])].sort((a, b) => a - b);
+    // Add firstSlot only if it's before the first MPS (it should be equal)
+    if (uniqueBoundaries[0] > firstSlot) uniqueBoundaries.unshift(firstSlot);
+
     const segments = [];
-    for (let i = 0; i < boundaries.length - 1; i++) {
-      segments.push({ start: boundaries[i], end: boundaries[i + 1], duration: boundaries[i + 1] - boundaries[i] });
+    for (let i = 0; i < uniqueBoundaries.length - 1; i++) {
+      const dur = uniqueBoundaries[i + 1] - uniqueBoundaries[i];
+      if (dur > 0) { // skip zero-duration segments
+        segments.push({ start: uniqueBoundaries[i], end: uniqueBoundaries[i + 1], duration: dur });
+      }
     }
-    const totalDuration = segments.reduce((s, seg) => s + seg.duration, 0);
 
     // Assign fillers per segment proportionally, ensuring no gap > 3 hours
     const fillerAssignment = segments.map(() => 0);
