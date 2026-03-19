@@ -502,7 +502,8 @@ function Summary({ result }) {
       <div className="p-5">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard label="MPS Triggers" value={summary.mps_count} icon={"\uD83D\uDCAA"} tip={TOOLTIPS.mps} />
-          <StatCard label="Total Fuelings" value={summary.total_fuelings} icon={"\uD83C\uDF7D\uFE0F"} />
+          <StatCard label="Total Fuelings" value={summary.total_fuelings} icon={"\uD83C\uDF7D\uFE0F"}
+            subtitle={summary.total_with_eaa > summary.total_fuelings ? `+ ${summary.total_with_eaa - summary.total_fuelings} EAA` : undefined} />
           <StatCard label="Longest BS Gap"
             value={summary.longest_blood_sugar_gap ? `${Math.floor(summary.longest_blood_sugar_gap / 60)}h ${summary.longest_blood_sugar_gap % 60}m` : "N/A"}
             icon={"\uD83E\uDE78"} warn={summary.longest_blood_sugar_gap > 180} tip={TOOLTIPS.blood_sugar} />
@@ -531,14 +532,17 @@ function Summary({ result }) {
   );
 }
 
-function StatCard({ label, value, icon, warn, tip }) {
+function StatCard({ label, value, icon, warn, tip, subtitle }) {
   return (
     <div className={`p-3 rounded-xl border ${warn ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"}`}>
       <div className="flex items-center justify-between">
         <span className="text-base">{icon}</span>
         {tip && <InfoTip text={tip} />}
       </div>
-      <div className={`text-lg font-bold mt-1 ${warn ? "text-amber-700" : "text-gray-800"}`}>{value}</div>
+      <div className={`text-lg font-bold mt-1 ${warn ? "text-amber-700" : "text-gray-800"}`}>
+        {value}
+        {subtitle && <span className="text-xs font-normal text-indigo-500 ml-1">{subtitle}</span>}
+      </div>
       <div className="text-[10px] text-gray-500">{label}</div>
     </div>
   );

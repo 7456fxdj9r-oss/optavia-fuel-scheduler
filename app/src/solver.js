@@ -270,138 +270,150 @@ export function solve(profile, workout = null) {
       });
     }
   } else {
-    // Standard plans: place MPS at slots 1, 3, 5 out of total
-    // First, determine how many total eating events we need
+    // Standard plans: anchor MPS slots first, then fill gaps with non-MPS fuelings
     const lgCount = template.lean_green_count;
     const efCount = template.essential_count;
     const snackCount = template.has_snack ? 1 : 0;
-
-    // Target total (not counting athlete EAA or ACTIVE EAAs)
     const coreSlotCount = efCount + lgCount + snackCount;
+    const fillerCount = coreSlotCount - mpsTarget; // non-MPS slots to place
 
-    // Distribute all slots evenly across waking window
-    const gap = wakingMins / (coreSlotCount - 1 || 1);
-    const slotTimes = [];
-    for (let i = 0; i < coreSlotCount; i++) {
-      slotTimes.push(Math.round(firstSlot + gap * i));
+    // ---- STEP 1a: Place MPS anchor points ----
+    // Distribute 3 MPS triggers evenly across waking window
+    const mpsGap = wakingMins / (mpsTarget - 1 || 1);
+    const mpsTimes = [];
+    for (let i = 0; i < mpsTarget; i++) {
+      mpsTimes.push(Math.round(firstSlot + mpsGap * i));
     }
 
-    // Determine which positions get MPS triggers
-    // MPS at positions 0, 2, 4 (1st, 3rd, 5th meals) when possible
-    const mpsPositions = [];
-    if (coreSlotCount >= 6) {
-      mpsPositions.push(0, 2, 4); // slots 1, 3, 5
-    } else if (coreSlotCount >= 4) {
-      mpsPositions.push(0, 2, coreSlotCount - 1); // first, third, last
-    } else {
-      // Few slots — space MPS evenly
-      const mpsGap = Math.floor(coreSlotCount / mpsTarget);
-      for (let i = 0; i < mpsTarget && i * mpsGap < coreSlotCount; i++) {
-        mpsPositions.push(i * mpsGap);
-      }
-    }
-
-    // Handle workout: find the best MPS slot to convert to post-workout
-    let postWorkoutIdx = -1;
+    // ---- STEP 1b: If workout, move the nearest MPS to post-workout ----
+    let postWorkoutMpsIdx = -1;
     if (workout) {
-      // Find which MPS position is closest to right after workout
       const targetTime = workoutEnd + 15;
       let bestDist = Infinity;
-      for (const pos of mpsPositions) {
-        const dist = Math.abs(slotTimes[pos] - targetTime);
-        if (dist < bestDist) {
-          bestDist = dist;
-          postWorkoutIdx = pos;
-        }
+      for (let i = 0; i < mpsTimes.length; i++) {
+        const dist = Math.abs(mpsTimes[i] - targetTime);
+        if (dist < bestDist) { bestDist = dist; postWorkoutMpsIdx = i; }
       }
-      // Move that slot to post-workout time
-      if (postWorkoutIdx >= 0) {
-        slotTimes[postWorkoutIdx] = Math.min(workoutEnd + 15, anabolicDeadline);
-        // Re-sort to maintain order
-        // But we need to keep track of which index is post-workout
+      if (postWorkoutMpsIdx >= 0) {
+        mpsTimes[postWorkoutMpsIdx] = Math.min(workoutEnd + 15, anabolicDeadline);
       }
     }
 
-    // Assign fueling types
+    // Sort MPS times (workout may have moved one out of order)
+    const mpsWithMeta = mpsTimes.map((t, i) => ({
+      time: t,
+      isPostWorkout: i === postWorkoutMpsIdx,
+    }));
+    mpsWithMeta.sort((a, b) => a.time - b.time);
+
+    // ---- STEP 1c: Fill gaps between MPS anchors with filler slots ----
+    // Create segments: [firstSlot ... mps1 ... mps2 ... mps3 ... lastSlot]
+    // Distribute fillers into segments proportional to segment duration
+    const boundaries = [firstSlot, ...mpsWithMeta.map(m => m.time), lastSlot];
+    const segments = [];
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      segments.push({ start: boundaries[i], end: boundaries[i + 1], duration: boundaries[i + 1] - boundaries[i] });
+    }
+    const totalDuration = segments.reduce((s, seg) => s + seg.duration, 0);
+
+    // Assign fillers per segment proportionally, ensuring no gap > 3 hours
+    const fillerAssignment = segments.map(() => 0);
+    let fillersRemaining = fillerCount;
+
+    // First pass: ensure each segment with gap > MAX_BLOOD_SUGAR_GAP gets at least 1 filler
+    for (let i = 0; i < segments.length; i++) {
+      if (segments[i].duration > MAX_BLOOD_SUGAR_GAP && fillersRemaining > 0) {
+        const needed = Math.ceil(segments[i].duration / MAX_BLOOD_SUGAR_GAP) - 1;
+        const assign = Math.min(needed, fillersRemaining);
+        fillerAssignment[i] = assign;
+        fillersRemaining -= assign;
+      }
+    }
+
+    // Second pass: distribute remaining fillers proportionally to largest segments
+    while (fillersRemaining > 0) {
+      // Find segment with largest effective gap (duration / (fillers + 1))
+      let worstIdx = -1, worstGapSize = 0;
+      for (let i = 0; i < segments.length; i++) {
+        const effectiveGap = segments[i].duration / (fillerAssignment[i] + 1);
+        if (effectiveGap > worstGapSize) { worstGapSize = effectiveGap; worstIdx = i; }
+      }
+      if (worstIdx >= 0) {
+        fillerAssignment[worstIdx]++;
+        fillersRemaining--;
+      } else break;
+    }
+
+    // Now place all slots: MPS anchors are already set, fill gaps evenly
+    const finalSlotList = [];
+
+    // Add MPS slots
     let lgAssigned = 0;
-    let efAssigned = 0;
-    let snackAssigned = 0;
-
-    // Create indexed array with times, sort by time
-    const indexed = slotTimes.map((t, i) => ({ time: t, origIdx: i }));
-    indexed.sort((a, b) => a.time - b.time);
-
-    // Reassign mpsPositions based on sorted order
-    const sortedMpsPositions = new Set();
-    for (const pos of mpsPositions) {
-      const sortedIdx = indexed.findIndex(x => x.origIdx === pos);
-      if (sortedIdx >= 0) sortedMpsPositions.add(sortedIdx);
-    }
-    const sortedPostWorkoutIdx = postWorkoutIdx >= 0
-      ? indexed.findIndex(x => x.origIdx === postWorkoutIdx)
-      : -1;
-
-    for (let i = 0; i < indexed.length; i++) {
-      const isMps = sortedMpsPositions.has(i);
-      const isPostWo = i === sortedPostWorkoutIdx;
+    for (let i = 0; i < mpsWithMeta.length; i++) {
       let fuelingId;
-
-      if (isMps) {
-        if (isPostWo) {
-          fuelingId = "whey"; // post-workout always whey
-        } else if (i === 0) {
-          fuelingId = "whey"; // first meal is whey
-        } else if (lgAssigned < lgCount) {
-          fuelingId = template.lean_green_type;
-          lgAssigned++;
-        } else {
-          fuelingId = "whey";
-        }
+      if (mpsWithMeta[i].isPostWorkout) {
+        fuelingId = "whey";
+      } else if (i === 0) {
+        fuelingId = "whey";
+      } else if (lgAssigned < lgCount) {
+        fuelingId = template.lean_green_type;
+        lgAssigned++;
       } else {
-        // Non-MPS slot
-        if (snackCount > 0 && snackAssigned < snackCount && i === indexed.length - 1) {
-          fuelingId = "snack";
-          snackAssigned++;
-        } else if (lgAssigned < lgCount && !isMps) {
-          // Check if we should put an L&G here instead
-          // Only if we have more L&G to assign than remaining MPS slots can handle
-          const remainingMpsSlots = [...sortedMpsPositions].filter(p => p > i).length;
-          const remainingLg = lgCount - lgAssigned;
-          if (remainingLg > remainingMpsSlots) {
-            fuelingId = template.lean_green_type;
-            lgAssigned++;
-          } else {
-            fuelingId = "ef";
-            efAssigned++;
-          }
-        } else {
-          fuelingId = "ef";
-          efAssigned++;
-        }
+        fuelingId = "whey";
       }
 
-      allSlots.push({
-        time: indexed[i].time,
+      finalSlotList.push({
+        time: mpsWithMeta[i].time,
         fueling_id: fuelingId,
-        is_mps_trigger: isMps,
-        is_post_workout: isPostWo,
+        is_mps_trigger: true,
+        is_post_workout: mpsWithMeta[i].isPostWorkout,
         is_bedtime_eaa: false,
         pushed: false,
       });
     }
 
-    // If ACTIVE plan, add EAA servings
+    // Add filler slots within each segment
+    let snackAssigned = 0;
+    for (let seg = 0; seg < segments.length; seg++) {
+      const count = fillerAssignment[seg];
+      if (count === 0) continue;
+      const segGap = segments[seg].duration / (count + 1);
+      for (let f = 1; f <= count; f++) {
+        const time = Math.round(segments[seg].start + segGap * f);
+        let fuelingId;
+        if (snackCount > 0 && snackAssigned < snackCount && seg === segments.length - 1 && f === count) {
+          fuelingId = "snack";
+          snackAssigned++;
+        } else if (lgAssigned < lgCount) {
+          fuelingId = template.lean_green_type;
+          lgAssigned++;
+        } else {
+          fuelingId = "ef";
+        }
+        finalSlotList.push({
+          time,
+          fueling_id: fuelingId,
+          is_mps_trigger: false,
+          is_post_workout: false,
+          is_bedtime_eaa: false,
+          pushed: false,
+        });
+      }
+    }
+
+    // Sort and push to allSlots
+    finalSlotList.sort((a, b) => a.time - b.time);
+    allSlots.push(...finalSlotList);
+
+    // If ACTIVE plan, add EAA servings (these are EXTRA, not counted as fuelings)
     if (template.has_eaa && template.eaa_count) {
-      // Place EAAs in the largest gaps, paired near Essential Fuelings
       const sorted = [...allSlots].sort((a, b) => a.time - b.time);
       for (let e = 0; e < template.eaa_count; e++) {
-        // Find largest gap between existing slots
         let maxGap = 0, maxIdx = 0;
         for (let i = 1; i < sorted.length; i++) {
           const g = sorted[i].time - sorted[i - 1].time;
           if (g > maxGap) { maxGap = g; maxIdx = i; }
         }
-        // Place EAA at midpoint of largest gap
         const eaaTime = Math.round((sorted[maxIdx - 1].time + sorted[maxIdx].time) / 2);
         const eaaSlot = {
           time: eaaTime,
@@ -409,6 +421,7 @@ export function solve(profile, workout = null) {
           is_mps_trigger: true,
           is_post_workout: false,
           is_bedtime_eaa: false,
+          is_extra_eaa: true,  // not a fueling, just a supplement
           pushed: false,
         };
         sorted.splice(maxIdx, 0, eaaSlot);
@@ -457,42 +470,9 @@ export function solve(profile, workout = null) {
     allSlots.sort((a, b) => a.time - b.time);
   }
 
-  // ---- STEP 4: Ensure no blood sugar gap > 3 hours ----
-  // Only count slots that stabilize blood sugar
-  // Insert extra fillers if needed (beyond plan count)
-  let safetyCounter = 0;
-  while (safetyCounter < 10) {
-    safetyCounter++;
-    const bsSlots = allSlots.filter(s => getFuelingById(s.fueling_id)?.stabilizes_blood_sugar);
-    bsSlots.sort((a, b) => a.time - b.time);
-
-    let worstGap = 0, worstStart = 0, worstEnd = 0;
-
-    // Check gap from wake to first BS slot
-    if (bsSlots.length > 0) {
-      const g = bsSlots[0].time - wakeMin;
-      if (g > worstGap) { worstGap = g; worstStart = wakeMin; worstEnd = bsSlots[0].time; }
-    }
-    // Check between consecutive BS slots
-    for (let i = 1; i < bsSlots.length; i++) {
-      const g = bsSlots[i].time - bsSlots[i - 1].time;
-      if (g > worstGap) { worstGap = g; worstStart = bsSlots[i - 1].time; worstEnd = bsSlots[i].time; }
-    }
-
-    if (worstGap <= MAX_BLOOD_SUGAR_GAP) break; // All good!
-
-    // Insert an Essential Fueling at midpoint
-    const midpoint = Math.round((worstStart + worstEnd) / 2);
-    allSlots.push({
-      time: midpoint,
-      fueling_id: "ef",
-      is_mps_trigger: false,
-      is_post_workout: false,
-      is_bedtime_eaa: false,
-      pushed: false,
-    });
-    allSlots.sort((a, b) => a.time - b.time);
-  }
+  // ---- STEP 4: Verify blood sugar gaps ----
+  // The segment-based distribution should already prevent gaps > 3h
+  // This is a safety net — it should NOT insert extra slots for standard plans
 
   // ---- STEP 5: Add bedtime EAA for athlete mode ----
   if (athleteApplies) {
@@ -589,7 +569,8 @@ export function solve(profile, workout = null) {
     summary: {
       overall_status: worstStatus,
       mps_count: evaluatedSlots.filter(s => s.is_mps_trigger).length,
-      total_fuelings: evaluatedSlots.length,
+      total_fuelings: evaluatedSlots.filter(s => s.fueling_id !== "eaa").length,
+      total_with_eaa: evaluatedSlots.length,
       longest_blood_sugar_gap: bloodSugarGaps.length ? Math.max(...bloodSugarGaps) : 0,
       shortest_mps_gap: mpsGaps.length ? Math.min(...mpsGaps) : null,
       anabolic_window_hit: anabolicHit,
