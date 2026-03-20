@@ -102,32 +102,83 @@ function SetupScreen({ profile, setProfile, workout, setWorkout, goal, setGoal, 
 
       <div className="max-w-lg mx-auto px-4 py-5 space-y-5">
 
-        {/* CARD 1: Goal */}
+        {/* CARD 1: Priorities */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden animate-slideUp">
           <div className="px-5 pt-5 pb-2">
-            <h2 className="text-base font-semibold text-slate-800">What's your main goal?</h2>
-            <p className="text-xs text-slate-400 mt-0.5">This determines how we prioritize your schedule</p>
+            <h2 className="text-base font-semibold text-slate-800">Set your priorities</h2>
+            <p className="text-xs text-slate-400 mt-0.5">You can do it all — just tell us what matters most to you</p>
           </div>
-          <div className="px-5 pb-5 grid grid-cols-3 gap-3">
-            {Object.entries(GOAL_MODES).map(([key, mode]) => (
-              <button key={key} onClick={() => {
-                setGoal(key);
-                setProfile(p => ({ ...p, priority_mode: mode.priority_mode }));
-                if (key === "muscle" && !workout) {
-                  setWorkout({ start_time: "08:00", duration_minutes: 60 });
-                }
-              }}
-                className={`p-4 rounded-xl text-center transition-all ${goal === key
-                  ? "bg-indigo-50 border-2 border-indigo-400 shadow-md scale-[1.03]"
-                  : "bg-slate-50 border-2 border-transparent hover:border-slate-200"}`}>
-                <div className="text-3xl mb-2">{mode.emoji}</div>
-                <div className="text-xs font-bold text-slate-800">{mode.label}</div>
-              </button>
-            ))}
+          <div className="px-5 pb-4 space-y-3">
+            {/* Priority 1 */}
+            <div>
+              <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-indigo-500 text-white text-[10px] font-bold flex items-center justify-center">1</span>
+                Most important to me
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(GOAL_MODES).map(([key, mode]) => {
+                  const isPrimary = goal.primary === key;
+                  return (
+                    <button key={key} onClick={() => {
+                      setGoal(prev => {
+                        const newGoal = { ...prev, primary: key };
+                        // If secondary is the same, clear it
+                        if (prev.secondary === key) newGoal.secondary = null;
+                        return newGoal;
+                      });
+                      setProfile(p => ({ ...p, priority_mode: mode.priority_mode }));
+                      if (key === "muscle" && !workout) {
+                        setWorkout({ start_time: "08:00", duration_minutes: 60 });
+                      }
+                    }}
+                      className={`p-3 rounded-xl text-center transition-all ${isPrimary
+                        ? "bg-indigo-50 border-2 border-indigo-400 shadow-md scale-[1.03]"
+                        : "bg-slate-50 border-2 border-transparent hover:border-slate-200"}`}>
+                      <div className="text-2xl mb-1">{mode.emoji}</div>
+                      <div className="text-[11px] font-bold text-slate-800">{mode.label}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Priority 2 */}
+            <div>
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-slate-300 text-white text-[10px] font-bold flex items-center justify-center">2</span>
+                Also important
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(GOAL_MODES)
+                  .filter(([key]) => key !== goal.primary)
+                  .map(([key, mode]) => {
+                    const isSecondary = goal.secondary === key;
+                    return (
+                      <button key={key} onClick={() => {
+                        setGoal(prev => ({ ...prev, secondary: isSecondary ? null : key }));
+                        // If secondary is muscle, auto-enable workout
+                        if (key === "muscle" && !workout) {
+                          setWorkout({ start_time: "08:00", duration_minutes: 60 });
+                        }
+                      }}
+                        className={`p-3 rounded-xl text-center transition-all ${isSecondary
+                          ? "bg-slate-100 border-2 border-slate-400 shadow-sm scale-[1.02]"
+                          : "bg-slate-50 border-2 border-transparent hover:border-slate-200"}`}>
+                        <div className="text-2xl mb-1">{mode.emoji}</div>
+                        <div className="text-[11px] font-bold text-slate-800">{mode.label}</div>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
           </div>
+
+          {/* Description of chosen combo */}
           <div className="px-5 pb-4">
             <p className="text-xs text-slate-500 bg-slate-50 rounded-lg p-3 leading-relaxed">
-              {GOAL_MODES[goal].description}
+              {goal.secondary
+                ? `Primary: ${GOAL_MODES[goal.primary].label} — ${GOAL_MODES[goal.primary].description} Secondary: ${GOAL_MODES[goal.secondary].label}.`
+                : GOAL_MODES[goal.primary].description}
             </p>
           </div>
         </div>
@@ -372,7 +423,7 @@ function ScheduleScreen({ result, profile, workout, goal, onBack, onEdit, active
           </button>
           <div className="text-center">
             <div className="text-sm font-bold text-slate-800">Your Schedule</div>
-            <div className="text-[10px] text-slate-400">{PLAN_TEMPLATES[profile.plan_type].label} · {GOAL_MODES[goal].label}</div>
+            <div className="text-[10px] text-slate-400">{PLAN_TEMPLATES[profile.plan_type].label} · {GOAL_MODES[goal.primary].label}</div>
           </div>
           <button onClick={onEdit}
             className="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 transition-all">
@@ -729,7 +780,7 @@ export default function App() {
   const [screen, setScreen] = useState("setup"); // "setup" or "schedule"
   const [baseProfile, setBaseProfile] = useState({ ...DEFAULT_PROFILE });
   const [baseWorkout, setBaseWorkout] = useState(null);
-  const [goal, setGoal] = useState("fat_loss");
+  const [goal, setGoal] = useState({ primary: "fat_loss", secondary: null });
   const [activeWhatIfs, setActiveWhatIfs] = useState({});
 
   const toggleWhatIf = (key) => {
@@ -740,7 +791,7 @@ export default function App() {
   const resetAll = () => {
     setBaseProfile({ ...DEFAULT_PROFILE });
     setBaseWorkout(null);
-    setGoal("fat_loss");
+    setGoal({ primary: "fat_loss", secondary: null });
     setActiveWhatIfs({});
     setScreen("setup");
   };
