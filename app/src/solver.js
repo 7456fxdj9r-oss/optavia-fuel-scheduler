@@ -322,27 +322,19 @@ export function solve(profile, workout = null) {
 
     mpsTimes.sort((a, b) => a - b);
 
-    // ---- STEP 1b: If workout, move the nearest MPS to post-workout ----
-    let postWorkoutMpsIdx = -1;
+    // ---- STEP 1b: Post-workout EAA (separate from MPS anchors) ----
+    // EAA absorbs faster than whey — it's the right choice for the anabolic window.
+    // Don't move an MPS anchor; add EAA as an extra slot instead.
+    let postWorkoutEaaTime = null;
     if (workout) {
-      const targetTime = workoutEnd + 15;
-      let bestDist = Infinity;
-      for (let i = 0; i < mpsTimes.length; i++) {
-        const dist = Math.abs(mpsTimes[i] - targetTime);
-        if (dist < bestDist) { bestDist = dist; postWorkoutMpsIdx = i; }
-      }
-      if (postWorkoutMpsIdx >= 0) {
-        mpsTimes[postWorkoutMpsIdx] = roundToQuarter(Math.min(workoutEnd + 15, anabolicDeadline));
-      }
+      postWorkoutEaaTime = roundToQuarter(Math.min(workoutEnd + 15, anabolicDeadline));
     }
 
-    // Sort MPS times (workout may have moved one out of order)
-    // Track post-workout by matching the moved time, not the pre-sort index
-    const postWorkoutTime = postWorkoutMpsIdx >= 0 ? mpsTimes[postWorkoutMpsIdx] : null;
+    // MPS anchors stay as-is (not moved for workout)
     mpsTimes.sort((a, b) => a - b);
     const mpsWithMeta = mpsTimes.map(t => ({
       time: t,
-      isPostWorkout: postWorkoutTime !== null && t === postWorkoutTime,
+      isPostWorkout: false, // MPS anchors are never post-workout now
     }));
 
     // ---- STEP 1c: Fill gaps between MPS anchors with filler slots ----
@@ -413,8 +405,6 @@ export function solve(profile, workout = null) {
     let bestLgIdx = -1;
     let bestLgDist = Infinity;
     for (let i = 0; i < mpsWithMeta.length; i++) {
-      // Don't assign L&G to post-workout (that should be whey)
-      if (mpsWithMeta[i].isPostWorkout) continue;
       // Don't assign L&G to first slot (that should be whey breakfast)
       if (i === 0 && mpsWithMeta.length > 1) continue;
       const dist = Math.abs(mpsWithMeta[i].time - lgTargetTime);
@@ -423,9 +413,7 @@ export function solve(profile, workout = null) {
 
     for (let i = 0; i < mpsWithMeta.length; i++) {
       let fuelingId;
-      if (mpsWithMeta[i].isPostWorkout) {
-        fuelingId = "whey";
-      } else if (i === bestLgIdx && lgAssigned < lgCount) {
+      if (i === bestLgIdx && lgAssigned < lgCount) {
         fuelingId = template.lean_green_type;
         lgAssigned++;
       } else if (i === 0) {
@@ -441,8 +429,21 @@ export function solve(profile, workout = null) {
         time: mpsWithMeta[i].time,
         fueling_id: fuelingId,
         is_mps_trigger: true,
-        is_post_workout: mpsWithMeta[i].isPostWorkout,
+        is_post_workout: false,
         is_bedtime_eaa: false,
+        pushed: false,
+      });
+    }
+
+    // Add post-workout EAA as an extra slot (not a fueling, fast absorption for anabolic window)
+    if (postWorkoutEaaTime !== null) {
+      finalSlotList.push({
+        time: postWorkoutEaaTime,
+        fueling_id: "eaa",
+        is_mps_trigger: true,
+        is_post_workout: true,
+        is_bedtime_eaa: false,
+        is_extra_eaa: true,
         pushed: false,
       });
     }
@@ -526,13 +527,15 @@ export function solve(profile, workout = null) {
   }
 
   // ---- STEP 3: Apply priority resolution ----
+  // Post-workout EAA may land too close to an MPS anchor.
+  // In metabolic mode (fat loss priority), push EAA later to preserve 4h MPS spacing.
+  // In performance mode (muscle priority), keep EAA in the anabolic window even if MPS gap shrinks.
   if (conflicts.length > 0 && workout) {
     const pwIdx = allSlots.findIndex(s => s.is_post_workout);
     if (profile.priority_mode === "metabolic" && pwIdx > 0) {
-      // Find previous MPS
       let prevMpsIdx = -1;
       for (let i = pwIdx - 1; i >= 0; i--) {
-        if (allSlots[i].is_mps_trigger) { prevMpsIdx = i; break; }
+        if (allSlots[i].is_mps_trigger && !allSlots[i].is_post_workout) { prevMpsIdx = i; break; }
       }
       if (prevMpsIdx >= 0) {
         const safeTime = roundToQuarter(allSlots[prevMpsIdx].time + MIN_MPS_GAP);
