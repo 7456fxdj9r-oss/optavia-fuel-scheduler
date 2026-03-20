@@ -615,6 +615,61 @@ export function solve(profile, workout = null) {
     }
   }
 
+  // ---- STEP 7: Check workout-to-L&G proximity ----
+  // Compare user's PREFERRED L&G time vs post-workout EAA.
+  // If they're less than 4h apart, both MPS triggers would be wasted —
+  // suggest moving workout or L&G so they're 4h+ apart.
+  const suggestions = [];
+  if (workout && !isGlp1 && !isOptimization) {
+    const preferredLgMin = profile.lg_preferred_time ? timeToMin(profile.lg_preferred_time) : null;
+    const postWoTime = roundToQuarter(Math.min(workoutEnd + 15, anabolicDeadline));
+
+    if (preferredLgMin) {
+      const gap = Math.abs(preferredLgMin - postWoTime);
+      if (gap < MIN_MPS_GAP) {
+        const workoutStartMin = timeToMin(workout.start_time);
+
+        // Build suggestion options based on which direction to move
+        const moveOptions = [];
+
+        if (postWoTime < preferredLgMin) {
+          // Workout is before L&G — suggest earlier workout or later L&G
+          const idealWorkoutEnd = preferredLgMin - MIN_MPS_GAP;
+          const idealWorkoutStart = roundToQuarter(idealWorkoutEnd - workout.duration_minutes);
+          const idealLgTime = roundToQuarter(postWoTime + MIN_MPS_GAP);
+
+          if (idealWorkoutStart >= wakeMin + 30) {
+            moveOptions.push(`Move your workout to ${minToDisplay(idealWorkoutStart)} so your post-workout EAA is 4h+ before your Lean & Green`);
+          }
+          if (idealLgTime <= lastSlot) {
+            moveOptions.push(`Move your Lean & Green to ${minToDisplay(idealLgTime)} or later so it's 4h+ after your post-workout EAA`);
+          }
+        } else {
+          // Workout is after L&G — suggest later workout or earlier L&G
+          const idealWorkoutStart = roundToQuarter(preferredLgMin + MIN_MPS_GAP);
+          const idealLgTime = roundToQuarter(postWoTime - MIN_MPS_GAP);
+
+          if (idealWorkoutStart + workout.duration_minutes <= sleepMin) {
+            moveOptions.push(`Move your workout to ${minToDisplay(idealWorkoutStart)} or later so your post-workout EAA is 4h+ after your Lean & Green`);
+          }
+          if (idealLgTime >= firstSlot) {
+            moveOptions.push(`Move your Lean & Green to ${minToDisplay(idealLgTime)} or earlier so it's 4h+ before your post-workout EAA`);
+          }
+        }
+
+        suggestions.push({
+          type: "workout_lg_too_close",
+          severity: "red",
+          gap_minutes: gap,
+          post_workout_time: postWoTime,
+          preferred_lg_time: preferredLgMin,
+          message: `Your workout (EAA at ${minToDisplay(postWoTime)}) and preferred Lean & Green (${minToDisplay(preferredLgMin)}) are only ${Math.floor(gap / 60)}h ${gap % 60 > 0 ? `${gap % 60}m` : ""} apart. You need 4h+ between protein triggers to maximize muscle protein synthesis.`,
+          options: moveOptions,
+        });
+      }
+    }
+  }
+
   // ---- SUMMARY ----
   const bsStabilizing = evaluatedSlots.filter(s => getFuelingById(s.fueling_id)?.stabilizes_blood_sugar);
   const bloodSugarGaps = [];
@@ -631,11 +686,15 @@ export function solve(profile, workout = null) {
     }
   }
 
-  const worstStatus = evaluatedSlots.reduce((w, s) => {
+  let worstStatus = evaluatedSlots.reduce((w, s) => {
     if (s.status === "red") return "red";
     if (s.status === "yellow" && w !== "red") return "yellow";
     return w;
   }, "green");
+
+  // Escalate overall status if there are suggestions
+  if (suggestions.some(s => s.severity === "red") && worstStatus !== "red") worstStatus = "red";
+  if (suggestions.some(s => s.severity === "yellow") && worstStatus === "green") worstStatus = "yellow";
 
   const anabolicHit = workout
     ? evaluatedSlots.some(s => s.is_post_workout && s.time <= anabolicDeadline)
@@ -644,6 +703,7 @@ export function solve(profile, workout = null) {
   return {
     slots: evaluatedSlots,
     conflicts: finalConflicts,
+    suggestions,
     summary: {
       overall_status: worstStatus,
       mps_count: evaluatedSlots.filter(s => s.is_mps_trigger).length,

@@ -327,7 +327,7 @@ function SetupScreen({ profile, setProfile, workout, setWorkout, goal, setGoal, 
 // SCREEN 2: SCHEDULE VIEW (Day Planner with Drag & Drop)
 // ============================================================
 function ScheduleScreen({ result, profile, workout, goal, onBack, onEdit, activeWhatIfs, toggleWhatIf, clearWhatIfs, baseWorkout }) {
-  const { slots, summary, conflicts } = result;
+  const { slots, summary, conflicts, suggestions = [] } = result;
   const [dragIdx, setDragIdx] = useState(null);
   const [dragOverIdx, setDragOverIdx] = useState(null);
   const [expandedSlot, setExpandedSlot] = useState(null);
@@ -500,6 +500,29 @@ function ScheduleScreen({ result, profile, workout, goal, onBack, onEdit, active
             </div>
           </div>
         )}
+
+        {/* Suggestions (e.g. workout too close to L&G) */}
+        {suggestions.length > 0 && suggestions.map((sug, si) => (
+          <div key={si} className="bg-red-50 border-2 border-red-200 rounded-2xl p-4 animate-slideUp">
+            <div className="text-sm font-semibold text-red-800 mb-2 flex items-center gap-2">
+              💡 Schedule Suggestion
+            </div>
+            <p className="text-xs text-red-700 leading-relaxed mb-3">
+              {sug.message}
+            </p>
+            {sug.options.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[10px] font-bold text-red-600 uppercase tracking-wider">Try one of these:</div>
+                {sug.options.map((opt, oi) => (
+                  <div key={oi} className="flex items-start gap-2 bg-white rounded-xl p-3 border border-red-100">
+                    <span className="text-sm mt-0.5">→</span>
+                    <span className="text-xs text-slate-700 leading-relaxed">{opt}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
 
         {/* What-If Toggles */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden animate-slideUp" style={{ animationDelay: "0.05s" }}>
