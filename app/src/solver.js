@@ -22,6 +22,11 @@ export function minToTime(m) {
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
+/** Round minutes to the nearest 15-minute mark (quarter hour) */
+function roundToQuarter(m) {
+  return Math.round(m / 15) * 15;
+}
+
 /** Format minutes to 12-hour display */
 export function minToDisplay(m) {
   const h24 = Math.floor(m / 60);
@@ -216,10 +221,10 @@ export function solve(profile, workout = null) {
     anabolicDeadline = workoutEnd + 30;
   }
 
-  // Usable window
-  const firstSlot = wakeMin + 30;
-  const lastSlot = sleepMin - 60;
-  const bedtimeEaaSlot = sleepMin - 30;
+  // Usable window (rounded to quarter hours)
+  const firstSlot = roundToQuarter(wakeMin + 30);
+  const lastSlot = roundToQuarter(sleepMin - 60);
+  const bedtimeEaaSlot = roundToQuarter(sleepMin - 30);
   const wakingMins = lastSlot - firstSlot;
 
   // ---- STEP 1: Place MPS slots at positions 1, 3, 5 pattern ----
@@ -233,7 +238,7 @@ export function solve(profile, workout = null) {
     const slotCount = 4;
     const gap = wakingMins / (slotCount - 1);
     for (let i = 0; i < slotCount; i++) {
-      const time = Math.round(firstSlot + gap * i);
+      const time = roundToQuarter(firstSlot + gap * i);
       // Put L&G+ at dinner position (slot 3, 0-indexed)
       const isLg = i === slotCount - 1;
       allSlots.push({
@@ -259,7 +264,7 @@ export function solve(profile, workout = null) {
       { fueling_id: "yogurt", is_mps: false },
     ];
     for (let i = 0; i < slotCount; i++) {
-      const time = Math.round(firstSlot + gap * i);
+      const time = roundToQuarter(firstSlot + gap * i);
       allSlots.push({
         time,
         fueling_id: optSlots[i].fueling_id,
@@ -290,11 +295,11 @@ export function solve(profile, workout = null) {
     if (mpsTarget >= 2) {
       if (lgPreferredMin && lgPreferredMin <= lastSlot) {
         // Clamp L&G time: must be at least MIN_MPS_GAP from first MPS
-        const clampedLg = Math.max(firstSlot + MIN_MPS_GAP, Math.min(lgPreferredMin, lastSlot));
+        const clampedLg = roundToQuarter(Math.max(firstSlot + MIN_MPS_GAP, Math.min(lgPreferredMin, lastSlot)));
         mpsTimes.push(clampedLg);
       } else {
         // Fallback: evenly distributed
-        mpsTimes.push(Math.round(firstSlot + wakingMins / 2));
+        mpsTimes.push(roundToQuarter(firstSlot + wakingMins / 2));
       }
     }
 
@@ -309,9 +314,9 @@ export function solve(profile, workout = null) {
       // Also check gap after last MPS to end of day
       const endGap = lastSlot - mpsTimes[mpsTimes.length - 1];
       if (endGap > maxGap) {
-        mpsTimes.push(Math.round(mpsTimes[mpsTimes.length - 1] + endGap / 2));
+        mpsTimes.push(roundToQuarter(mpsTimes[mpsTimes.length - 1] + endGap / 2));
       } else {
-        mpsTimes.push(Math.round((gapStart + gapEnd) / 2));
+        mpsTimes.push(roundToQuarter((gapStart + gapEnd) / 2));
       }
     }
 
@@ -327,7 +332,7 @@ export function solve(profile, workout = null) {
         if (dist < bestDist) { bestDist = dist; postWorkoutMpsIdx = i; }
       }
       if (postWorkoutMpsIdx >= 0) {
-        mpsTimes[postWorkoutMpsIdx] = Math.min(workoutEnd + 15, anabolicDeadline);
+        mpsTimes[postWorkoutMpsIdx] = roundToQuarter(Math.min(workoutEnd + 15, anabolicDeadline));
       }
     }
 
@@ -355,11 +360,13 @@ export function solve(profile, workout = null) {
       }
     }
 
-    // Assign fillers per segment proportionally, ensuring no gap > 3 hours
+    // Assign fillers per segment — prefer ~2h gaps (better to be closer to 2h than 3h)
+    // Target gap: 120 min (2h). Max allowed: 180 min (3h).
+    const IDEAL_GAP = 120; // prefer 2-hour gaps
     const fillerAssignment = segments.map(() => 0);
     let fillersRemaining = fillerCount;
 
-    // First pass: ensure each segment with gap > MAX_BLOOD_SUGAR_GAP gets at least 1 filler
+    // First pass: ensure each segment gets enough fillers so no sub-gap > MAX (3h)
     for (let i = 0; i < segments.length; i++) {
       if (segments[i].duration > MAX_BLOOD_SUGAR_GAP && fillersRemaining > 0) {
         const needed = Math.ceil(segments[i].duration / MAX_BLOOD_SUGAR_GAP) - 1;
@@ -369,18 +376,30 @@ export function solve(profile, workout = null) {
       }
     }
 
-    // Second pass: distribute remaining fillers proportionally to largest segments
+    // Second pass: distribute remaining to bring gaps closest to IDEAL_GAP (~2h)
+    // Place fillers in segments whose effective gap is farthest above the ideal
     while (fillersRemaining > 0) {
-      // Find segment with largest effective gap (duration / (fillers + 1))
-      let worstIdx = -1, worstGapSize = 0;
+      let worstIdx = -1, worstExcess = 0;
       for (let i = 0; i < segments.length; i++) {
         const effectiveGap = segments[i].duration / (fillerAssignment[i] + 1);
-        if (effectiveGap > worstGapSize) { worstGapSize = effectiveGap; worstIdx = i; }
+        const excess = effectiveGap - IDEAL_GAP; // how far above 2h
+        if (excess > worstExcess) { worstExcess = excess; worstIdx = i; }
       }
-      if (worstIdx >= 0) {
+      if (worstIdx >= 0 && worstExcess > 0) {
         fillerAssignment[worstIdx]++;
         fillersRemaining--;
-      } else break;
+      } else {
+        // All gaps are at or below ideal — put remaining in largest gap
+        let bigIdx = -1, bigGap = 0;
+        for (let i = 0; i < segments.length; i++) {
+          const g = segments[i].duration / (fillerAssignment[i] + 1);
+          if (g > bigGap) { bigGap = g; bigIdx = i; }
+        }
+        if (bigIdx >= 0) {
+          fillerAssignment[bigIdx]++;
+          fillersRemaining--;
+        } else break;
+      }
     }
 
     // Now place all slots: MPS anchors are already set, fill gaps evenly
@@ -435,7 +454,7 @@ export function solve(profile, workout = null) {
       if (count === 0) continue;
       const segGap = segments[seg].duration / (count + 1);
       for (let f = 1; f <= count; f++) {
-        const time = Math.round(segments[seg].start + segGap * f);
+        const time = roundToQuarter(segments[seg].start + segGap * f);
         let fuelingId;
         if (snackCount > 0 && snackAssigned < snackCount && seg === segments.length - 1 && f === count) {
           fuelingId = "snack";
@@ -470,7 +489,7 @@ export function solve(profile, workout = null) {
           const g = sorted[i].time - sorted[i - 1].time;
           if (g > maxGap) { maxGap = g; maxIdx = i; }
         }
-        const eaaTime = Math.round((sorted[maxIdx - 1].time + sorted[maxIdx].time) / 2);
+        const eaaTime = roundToQuarter((sorted[maxIdx - 1].time + sorted[maxIdx].time) / 2);
         const eaaSlot = {
           time: eaaTime,
           fueling_id: "eaa",
@@ -516,7 +535,7 @@ export function solve(profile, workout = null) {
         if (allSlots[i].is_mps_trigger) { prevMpsIdx = i; break; }
       }
       if (prevMpsIdx >= 0) {
-        const safeTime = allSlots[prevMpsIdx].time + MIN_MPS_GAP;
+        const safeTime = roundToQuarter(allSlots[prevMpsIdx].time + MIN_MPS_GAP);
         if (safeTime <= lastSlot) {
           allSlots[pwIdx].time = safeTime;
           allSlots[pwIdx].pushed = true;
@@ -550,7 +569,7 @@ export function solve(profile, workout = null) {
       if (bsSlots.length > 0) {
         const lastBs = bsSlots[bsSlots.length - 1];
         if (bedtimeEaaSlot - lastBs.time > MAX_BLOOD_SUGAR_GAP) {
-          const mid = Math.round((lastBs.time + bedtimeEaaSlot) / 2);
+          const mid = roundToQuarter((lastBs.time + bedtimeEaaSlot) / 2);
           allSlots.push({
             time: mid,
             fueling_id: "ef",
